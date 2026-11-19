@@ -1,72 +1,97 @@
-#include "shader_utils/shader_utils.hpp"
-#include <fstream>
-#include <sstream>
-#include <iostream>
-#include <string>
+#include <gl_utils/gl_utils.hpp>
+#include <cmath>
+#include <cstddef>
 
-namespace shader_utils {
-  ShaderProgramSource ParseShader(const std::string &filepath) {
-    std::ifstream stream(filepath);
-    
-    std::string line;
-    std::stringstream ss[2]; // 2 since there are two types of shaders: `vertex` and `fragment`
-    ShaderType type = ShaderType::NONE;
+namespace gl_utils {
 
-    while (getline(stream, line)) {
-      if (line.find("#shader") != std::string::npos) {
-        if (line.find("vertex") != std::string::npos) {
-          type = ShaderType::VERTEX;
-        } else if (line.find("fragment") != std::string::npos) {
-          type = ShaderType::FRAGMENT;
-        }
-      } else {
-        ss[(int)type] << line << '\n';
-      }
-    }
-    
-    return { ss[0].str(), ss[1].str() };
+Mat4 makeOrthoAspect(float aspect) {
+  if (aspect == 0.0f) {
+    aspect = 1.0f;
   }
-
-
-  unsigned int CompileShader(unsigned int type, const std::string &source) {
-    unsigned int id = glCreateShader(type);
-    const char *src = source.c_str(); // pointer
-    glShaderSource(id, 1, &src, nullptr);
-    glCompileShader(id);
-
-    int result;
-    glGetShaderiv(id, GL_COMPILE_STATUS, &result); // i -> integer, v -> vector
-    if (result == GL_FALSE) {
-      int length;
-      glGetShaderiv(id, GL_INFO_LOG_LENGTH, &length);
-      char *message = (char *)alloca(length * sizeof(char));
-      glGetShaderInfoLog(id, length, &length, message);
-      std::cout << "Failed to compile "
-                << (type == GL_VERTEX_SHADER ? "vertex" : "fragment")
-                << " shader!" << std::endl;
-      std::cout << message << std::endl;
-      glDeleteShader(id);
-      return 0;
-    }
-
-    return id;
-  }
-
-  
-  unsigned int CreateShader(const std::string &vertexShader, const std::string &fragmentShader) {
-    unsigned int program = glCreateProgram();
-
-    unsigned int vs = CompileShader(GL_VERTEX_SHADER, vertexShader);
-    unsigned int fs = CompileShader(GL_FRAGMENT_SHADER, fragmentShader);
-
-    glAttachShader(program, vs);
-    glAttachShader(program, fs);
-    glLinkProgram(program);
-    glValidateProgram(program);
-
-    glDeleteShader(vs);
-    glDeleteShader(fs);
-
-    return program;
-  }
+  Mat4 proj;
+  proj.m[0] = 1.0f / aspect;
+  proj.m[5] = 1.0f;
+  proj.m[10] = -1.0f;
+  proj.m[15] = 1.0f;
+  return proj;
 }
+
+MeshData Circle::buildMesh() const {
+  MeshData mesh;
+  if (segments < 3) {
+    return mesh;
+  }
+
+  constexpr float PI = 3.14159265358979323846f;
+  const float TAU = 2.0f * PI;
+
+  for (int i = 0; i < segments; ++i) {
+    float angle0 = (TAU * static_cast<float>(i)) / static_cast<float>(segments);
+    float angle1 = (TAU * static_cast<float>(i + 1)) / static_cast<float>(segments);
+
+    float x0 = cx + radius * std::cos(angle0);
+    float y0 = cy + radius * std::sin(angle0);
+
+    float x1 = cx + radius * std::cos(angle1);
+    float y1 = cy + radius * std::sin(angle1);
+
+    mesh.vertices.push_back({cx, cy, cz, r, g, b});
+    mesh.vertices.push_back({x0, y0, cz, r, g, b});
+    mesh.vertices.push_back({x1, y1, cz, r, g, b});
+  }
+
+  return mesh;
+}
+
+void GPUMesh::upload(const MeshData& data) {
+  vertexCount = static_cast<GLsizei>(data.vertices.size());
+
+  if (VAO == 0) {
+    glGenVertexArrays(1, &VAO);
+    glGenBuffers(1, &VBO);
+  }
+
+  glBindVertexArray(VAO);
+  glBindBuffer(GL_ARRAY_BUFFER, VBO);
+  glBufferData(
+      GL_ARRAY_BUFFER,
+      static_cast<GLsizeiptr>(data.vertices.size() * sizeof(Vertex)),
+      data.vertices.data(),
+      GL_STATIC_DRAW);
+
+  glVertexAttribPointer(
+      0, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+      reinterpret_cast<const void*>(offsetof(Vertex, x)));
+  glEnableVertexAttribArray(0);
+
+  glVertexAttribPointer(
+      1, 3, GL_FLOAT, GL_FALSE, sizeof(Vertex),
+      reinterpret_cast<const void*>(offsetof(Vertex, r)));
+  glEnableVertexAttribArray(1);
+
+  glBindBuffer(GL_ARRAY_BUFFER, 0);
+  glBindVertexArray(0);
+}
+
+void GPUMesh::draw() const {
+  if (vertexCount == 0 || VAO == 0) {
+    return;
+  }
+  glBindVertexArray(VAO);
+  glDrawArrays(GL_TRIANGLES, 0, vertexCount);
+  glBindVertexArray(0);
+}
+
+void GPUMesh::destroy() {
+  if (VBO != 0) {
+    glDeleteBuffers(1, &VBO);
+    VBO = 0;
+  }
+  if (VAO != 0) {
+    glDeleteVertexArrays(1, &VAO);
+    VAO = 0;
+  }
+  vertexCount = 0;
+}
+
+} // namespace gl_utils
